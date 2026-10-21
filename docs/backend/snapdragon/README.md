@@ -332,7 +332,8 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
 
 - `GGML_HEXAGON_POWER_MODE=default`
   Controls the DCVS/HMX power mode requested from the HTP DSP for the session. Modes are listed
-  from lowest to highest power. All modes except `burst` leave DCVS enabled and keep the HTP awake.
+  from lowest to highest power. Normal profiles keep DCVS enabled and the HTP awake; `external`
+  leaves DCVS and accelerator clock policy to another controller.
 
   - `low_power_saver`
   - `power_saver`
@@ -342,6 +343,7 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
   - `high_performance`
   - `sustained_high_performance`
   - `burst` (maximum clocks, disables DCVS; may thermal-throttle on sustained workloads)
+  - `external` (leave DCVS and accelerator clock policy to an external controller)
   - `default` (currently aliases to `burst`)
 
   Unknown values are logged as a warning and fall back to `burst`.
@@ -353,6 +355,7 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
 
       `GGML_HEXAGON_POWER_MODE=balanced llama-completion ...`
       `./scripts/snapdragon/run.py --hex-power-mode sustained_high_performance ...`
+      `GGML_HEXAGON_POWER_MODE=external llama-quartz-bench ...`
 
 
 - `GGML_HEXAGON_VERBOSE=1`

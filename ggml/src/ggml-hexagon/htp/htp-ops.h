@@ -207,6 +207,7 @@ enum htp_power_mode {
     HTP_POWER_MODE_HIGH_PERFORMANCE           = 5,
     HTP_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE = 6,
     HTP_POWER_MODE_BURST                      = 7,
+    HTP_POWER_MODE_EXTERNAL                   = 8,
 
     HTP_POWER_MODE_COUNT
 };

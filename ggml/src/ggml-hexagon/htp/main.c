@@ -436,17 +436,22 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         return AEE_EBADPARM;
     }
 
-    if (power_mode >= HTP_POWER_MODE_COUNT) {
+    const bool external_power = power_mode == HTP_POWER_MODE_EXTERNAL;
+    if (!external_power && power_mode >= HTP_POWER_MODE_COUNT) {
         FARF(ERROR, "invalid power-mode %u, falling back to burst", (unsigned) power_mode);
         power_mode = HTP_POWER_MODE_BURST;
     }
-    const struct htp_power_profile * pwr = &htp_power_profiles[power_mode];
-    FARF(ALWAYS, "power-mode %u : dcvs-enable %d bus[%u,%u,%u] core[%u,%u,%u] sleep-disable %d hmx[%u,%u,%u]",
-         (unsigned) power_mode, (int) pwr->dcvs_enable,
-         (unsigned) pwr->bus_min_corner, (unsigned) pwr->bus_max_corner, (unsigned) pwr->bus_target_corner,
-         (unsigned) pwr->core_min_corner, (unsigned) pwr->core_max_corner, (unsigned) pwr->core_target_corner,
-         (int) pwr->sleep_disable,
-         (unsigned) pwr->hmx_min_corner, (unsigned) pwr->hmx_max_corner, (unsigned) pwr->hmx_target_corner);
+    const struct htp_power_profile * pwr = external_power ? NULL : &htp_power_profiles[power_mode];
+    if (external_power) {
+        FARF(ALWAYS, "power-mode external: leaving DCVS and accelerator clock votes to the external controller");
+    } else {
+        FARF(ALWAYS, "power-mode %u : dcvs-enable %d bus[%u,%u,%u] core[%u,%u,%u] sleep-disable %d hmx[%u,%u,%u]",
+             (unsigned) power_mode, (int) pwr->dcvs_enable,
+             (unsigned) pwr->bus_min_corner, (unsigned) pwr->bus_max_corner, (unsigned) pwr->bus_target_corner,
+             (unsigned) pwr->core_min_corner, (unsigned) pwr->core_max_corner, (unsigned) pwr->core_target_corner,
+             (int) pwr->sleep_disable,
+             (unsigned) pwr->hmx_min_corner, (unsigned) pwr->hmx_max_corner, (unsigned) pwr->hmx_target_corner);
+    }
 
     if (h->ctx) {
         FARF(ERROR, "Queue already open");
@@ -558,8 +563,8 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
 
     HAP_setFARFRuntimeLoggingParams(0xffff, NULL, 0);
 
-    // Set client class
-    {
+    // Set client class and DCVS policy unless an external controller owns them.
+    if (!external_power) {
         HAP_power_request_t request;
         memset(&request, 0, sizeof(HAP_power_request_t));
         request.type    = HAP_power_set_apptype;
@@ -572,7 +577,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     }
 
     // DCVS setup
-    {
+    if (!external_power) {
         HAP_power_request_t request;
         memset(&request, 0, sizeof(request));
 
@@ -598,6 +603,11 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
             return err;
         }
 
+    }
+
+    // HVX must still be powered for HTP execution.
+    {
+        HAP_power_request_t request;
         memset(&request, 0, sizeof(request));
         request.type         = HAP_power_set_HVX;
         request.hvx.power_up = TRUE;
@@ -608,29 +618,30 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     }
 
 #if __HVX_ARCH__ >= 75
-    {
-        // Power on HMX and set HMX clock
+    if (n_hmx) {
+        // Power on HMX. Only set its clock when GGML owns power policy.
         HAP_power_request_t request;
         memset(&request, 0, sizeof(HAP_power_request_t));
         request.type = HAP_power_set_HMX_v2;
         request.hmx_v2.set_power     = TRUE;
         request.hmx_v2.power_up      = TRUE;
-        request.hmx_v2.set_clock     = TRUE;
-        request.hmx_v2.target_corner = pwr->hmx_target_corner;
-        request.hmx_v2.min_corner    = pwr->hmx_min_corner;
-        request.hmx_v2.max_corner    = pwr->hmx_max_corner;
-        request.hmx_v2.perf_mode     = pwr->hmx_perf_mode;
-        FARF(ALWAYS, "Setting HMX clock\n");
+        if (!external_power) {
+            request.hmx_v2.set_clock     = TRUE;
+            request.hmx_v2.target_corner = pwr->hmx_target_corner;
+            request.hmx_v2.min_corner    = pwr->hmx_min_corner;
+            request.hmx_v2.max_corner    = pwr->hmx_max_corner;
+            request.hmx_v2.perf_mode     = pwr->hmx_perf_mode;
+        }
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
-            FARF(ERROR, "ggml-hex: error setting HMX clock.");
+            FARF(ERROR, "ggml-hex: error powering/configuring HMX.");
             htp_iface_stop(handle);
             return err;
         }
     }
 #else
-    {
-        // Power on HMX
+    if (n_hmx) {
+        // Power on HMX.
         HAP_power_request_t request;
         memset(&request, 0, sizeof(HAP_power_request_t));
         request.type         = HAP_power_set_HMX;

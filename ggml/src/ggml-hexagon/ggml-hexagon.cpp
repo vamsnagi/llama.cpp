@@ -119,6 +119,7 @@ static const std::pair<const char *, int> htp_power_mode_names[] = {
     { "high_performance",           HTP_POWER_MODE_HIGH_PERFORMANCE },
     { "sustained_high_performance", HTP_POWER_MODE_SUSTAINED_HIGH_PERFORMANCE },
     { "burst",                      HTP_POWER_MODE_BURST },
+    { "external",                   HTP_POWER_MODE_EXTERNAL },
     { "default",                    HTP_POWER_MODE_BURST }, // flip this to change the default mode
 };
 

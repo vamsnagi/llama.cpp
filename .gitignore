@@ -54,6 +54,8 @@
 /tmp/
 /autogen-*.md
 /common/build-info.cpp
+/pkg-snapdragon*
+/build-snapdragon*
 
 # Deprecated
 
