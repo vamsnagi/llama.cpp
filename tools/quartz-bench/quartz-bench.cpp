@@ -60,6 +60,30 @@ static bool set_external_hexagon_power_mode() {
 #endif
 }
 
+// HAP_power_get() exposes the observed Q6 core and HMX rates plus DCVS state.
+// SDK 6.7 has no matching getters for HVX, Q6 bus, or CENG, so Quartz leaves
+// those fields unset instead of presenting the requested vote as a frequency.
+static void print_nsp_hap_state(QuartzSession& session, const char* phase) {
+    const auto read = session.readNspPowerState();
+    if (!read.result.ok()) {
+        std::fprintf(stderr,
+                     "[quartz-bench] NSP HAP readback phase=%s failed: %s\n",
+                     phase, read.result.detail.c_str());
+        return;
+    }
+
+    const auto to_mhz = [](const std::optional<uint32_t>& hz) {
+        return hz ? static_cast<double>(*hz) / 1000000.0 : -1.0;
+    };
+    const char* dcvs = !read.state.dcvsEnabled ? "unavailable"
+                       : (*read.state.dcvsEnabled ? "enabled" : "disabled");
+    std::fprintf(stderr,
+                 "[quartz-bench] NSP HAP readback phase=%s core=%.3f MHz "
+                 "hmx=%.3f MHz dcvs=%s; hvx=unavailable bus=unavailable "
+                 "ceng=unavailable\n",
+                 phase, to_mhz(read.state.coreHz), to_mhz(read.state.hmxHz), dcvs);
+}
+
 // The client is already open, so this measures only method-3 marshalling,
 // FastRPC, DSP HAP_power_set(), and the synchronous response. It does not
 // measure physical clock-settling time.
@@ -72,15 +96,17 @@ static bool apply_nsp_power_mode(QuartzSession& session, NspPowerMode mode,
         applyEnd - applyBegin).count();
     if (!result.ok()) {
         std::fprintf(stderr,
-                     "failed to apply NSP mode %s for %s after %lld us: %s\n",
-                     toString(mode), phase, static_cast<long long>(applyUs),
-                     result.detail.c_str());
+                     "failed to apply NSP mode %s for %s HAP_rc=%d after %lld us: %s\n",
+                     toString(mode), phase, result.backendStatus.value_or(-1),
+                     static_cast<long long>(applyUs), result.detail.c_str());
         return false;
     }
     std::fprintf(stderr,
-                 "[quartz-bench] NSP phase=%s mode=%s RPC=%lld us "
+                 "[quartz-bench] NSP phase=%s mode=%s HAP_rc=%d RPC=%lld us "
                  "\n",
-                 phase, toString(mode), static_cast<long long>(applyUs));
+                 phase, toString(mode), result.backendStatus.value_or(-1),
+                 static_cast<long long>(applyUs));
+    // print_nsp_hap_state(session, phase);
     return true;
 }
 
@@ -132,18 +158,22 @@ int main(int argc, char ** argv) {
     // own HAP vote.  In the no-NSP-options case, leave both HAP and llama's
     // environment entirely untouched.
     const bool quartzNspControlRequested = nspPowerModeRequested || !opt.plan.empty();
-    if (quartzNspControlRequested && !set_external_hexagon_power_mode()) {
-        std::fprintf(stderr, "failed to set GGML_HEXAGON_POWER_MODE=external\n");
-        return 1;
-    }
+
     if (quartzNspControlRequested) {
-        std::fprintf(stderr,
-                     "[quartz-bench] set GGML_HEXAGON_POWER_MODE=external "
-                     "(Quartz owns NSP HAP voting)\n");
+        if (set_external_hexagon_power_mode()) {
+            std::fprintf(stderr,
+                        "[quartz-bench] set GGML_HEXAGON_POWER_MODE=external "
+                        "(Quartz owns NSP HAP voting)\n");
+        } else {
+            std::fprintf(stderr,
+                        "[quartz-bench] failed to set "
+                        "GGML_HEXAGON_POWER_MODE=external\n");
+            return 1;
+        }
     } else {
         std::fprintf(stderr,
-                     "[quartz-bench] GGML_HEXAGON_POWER_MODE left unchanged "
-                     "(Quartz NSP HAP control disabled)\n");
+                    "[quartz-bench] GGML_HEXAGON_POWER_MODE left unchanged "
+                    "(Quartz NSP HAP control disabled)\n");
     }
 
     common_params params;
@@ -170,8 +200,6 @@ int main(int argc, char ** argv) {
     }
 
     SessionConfig session_config;
-    session_config.phaseDetectionThreshold = 1.0;
-    session_config.recordCheckpointsInApply = true;
     QuartzSession session(nullptr, session_config);
 
     if (quartzNspControlRequested) {
@@ -217,12 +245,14 @@ int main(int argc, char ** argv) {
                      "benchmarking, then verify the energy_uj nodes are readable.\n");
         return 1;
     }
+
+    for (const auto & name : rail_names) {
+        std::fprintf(stderr, " %s", name.c_str());
+    }
+    std::fprintf(stderr, "\n");
+    
     if (!session.rails().has("soc")) {
         std::fprintf(stderr, "[quartz-bench] required telemetry rail 'soc' was not discovered; available rails:");
-        for (const auto & name : rail_names) {
-            std::fprintf(stderr, " %s", name.c_str());
-        }
-        std::fprintf(stderr, "\n");
         return 1;
     }
 
@@ -234,8 +264,14 @@ int main(int argc, char ** argv) {
     // plan-loading branch above added source lines before these checkpoints.
     // Keep their logical line numbers at the prior values so a plan generated
     // from the supplied low_balanced trace still matches at runtime.
-#line 194 "quartz-bench.cpp"
+
     session.start();
+
+    // A plan applies its initial NSP mode during start().  The direct-mode
+    // path prints readback in apply_nsp_power_mode() above.
+    // if (quartzNspControlRequested && !opt.plan.empty()) {
+    //     print_nsp_hap_state(session, "plan-initial");
+    // }
 
     session.checkpoint();
 
@@ -279,6 +315,13 @@ int main(int argc, char ** argv) {
     const int n_batch = static_cast<int>(llama_n_batch(ctx));
     const int n_predict = params.n_predict < 0 ? 32 : params.n_predict;
 
+    // Capture the governor's state after model/context setup but immediately
+    // before the first inference decode.  Do this once, rather than per
+    // token, so measurement itself does not perturb decode timing.
+    // if (quartzNspControlRequested) {
+    //     print_nsp_hap_state(session, "before-decode");
+    // }
+
     for (int pos = 0; pos < static_cast<int>(prompt_tokens.size()); ) {
         const int n_tokens = std::min(n_batch, static_cast<int>(prompt_tokens.size()) - pos);
         llama_batch batch = llama_batch_get_one(prompt_tokens.data() + pos, n_tokens);
@@ -310,6 +353,23 @@ int main(int argc, char ** argv) {
     }
 
     session.stop();
+    // Use the same public unified segmentation API exposed to applications.
+    // Keep only workload-relevant rails, reject sub-second control phases,
+    // and merge adjacent phases with nearly identical rail-power profiles.
+    
+    // analysis::PhaseOptions phaseOptions;
+    // phaseOptions.metric = DistanceMetric::Manhattan;
+    // phaseOptions.marginWatts = 0.05;
+    // phaseOptions.cutoff = 0.15;
+    // phaseOptions.minDurationUs = 200000;
+    // const auto phaseResult = session.assignPhases(phaseOptions);
+    // std::fprintf(stderr,
+    //              "[quartz-bench] phases=%zu null_boundaries_removed=%zu "
+    //              "merged_boundaries_removed=%zu iterations=%zu\n",
+    //              phaseResult.finalPhaseCount,
+    //              phaseResult.nullBoundariesRemoved,
+    //              phaseResult.mergedBoundariesRemoved,
+    //              phaseResult.iterationsRun);
 
     const auto & trace = session.checkpointTrace();
     if (trace.size() < 2) {
@@ -347,7 +407,7 @@ int main(int argc, char ** argv) {
     std::fprintf(stderr, "[quartz-bench] total energy_j=%.9f duration_ms=%.3f\n",
                  energy_j_, duration_ms_);
 
-    session.exportCsv(opt.samples);
+    session.exportSamplesCsv(opt.samples);
     session.exportCheckpointsCsv(opt.trace, CheckpointExport::All);
     session.exportCheckpointsCsv(opt.pivots, CheckpointExport::Pivots);
 
