@@ -76,7 +76,12 @@ if [ ! -d "${PKG_DIR}" ]; then
 fi
 QUARTZ_TOOLS=()
 if [ -d "${QUARTZ_TOOLS_DIR}" ]; then
-    mapfile -t QUARTZ_TOOLS < <(find "${QUARTZ_TOOLS_DIR}" -type f -name 'quartz-*' -perm /111 | sort)
+    for tool_dir in "${QUARTZ_TOOLS_DIR}"/quartz-*; do
+        tool="${tool_dir}/${tool_dir##*/}"
+        if [ -f "${tool}" ]; then
+            QUARTZ_TOOLS+=("${tool}")
+        fi
+    done
 fi
 clear
 
@@ -100,23 +105,29 @@ if [ "${#QUARTZ_TOOLS[@]}" -gt 0 ]; then
     echo "==> Pushing Quartz tools (${#QUARTZ_TOOLS[@]} executables)"
     "${ADB[@]}" shell "mkdir -p ${DEVICE_DEST}/llama.cpp/tools"
     for tool in "${QUARTZ_TOOLS[@]}"; do
-        "${ADB[@]}" push "${tool}" "${DEVICE_DEST}/llama.cpp/tools/"
+        tool_name="$(basename "${tool}")"
+        tool_dest="${DEVICE_DEST}/llama.cpp/tools/${tool_name}"
+        # Preserve the nested layout from earlier build-tree deployments.
+        if "${ADB[@]}" shell "test -d '${tool_dest}'"; then
+            tool_dest="${tool_dest}/${tool_name}"
+        fi
+        "${ADB[@]}" push "${tool}" "${tool_dest}"
+        "${ADB[@]}" shell "chmod 755 '${tool_dest}'"
     done
 else
     echo "==> WARNING: no built Quartz tools found; skipping: ${QUARTZ_TOOLS_DIR}" >&2
 fi
 
 echo "==> Setting permissions on binaries"
-"${ADB[@]}" shell "chmod 777 ${DEVICE_DEST}/llama.cpp/bin/*"
-if [ -f "${NSP_SKEL}" ]; then
-    "${ADB[@]}" shell "chmod 755 ${DEVICE_DEST}/llama.cpp/lib/libnsp_freq_skel.so"
-fi
-if [ "${#QUARTZ_TOOLS[@]}" -gt 0 ]; then
-    "${ADB[@]}" shell "chmod 755 ${DEVICE_DEST}/llama.cpp/tools/quartz-*"
-fi
+"${ADB[@]}" shell "find '${DEVICE_DEST}/llama.cpp/bin' -type f -exec chmod 755 {} +"
+"${ADB[@]}" shell "find '${DEVICE_DEST}/llama.cpp/lib' -type f -name '*.so*' -exec chmod 755 {} +"
 
-echo "==> Pushing sample-prompt.txt"
-"${ADB[@]}" push "${SCRIPT_DIR}/sample-prompt.txt" "${DEVICE_DEST}/llama.cpp/"
+if [ -f "${SCRIPT_DIR}/sample-prompt.txt" ]; then
+    echo "==> Pushing sample-prompt.txt"
+    "${ADB[@]}" push "${SCRIPT_DIR}/sample-prompt.txt" "${DEVICE_DEST}/llama.cpp/"
+else
+    echo "==> WARNING: sample-prompt.txt not found; skipping" >&2
+fi
 
 echo ""
 echo "==> Deployment complete."
