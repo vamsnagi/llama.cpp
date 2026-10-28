@@ -28,7 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKG_DIR="${SCRIPT_DIR}/pkg-snapdragon/llama.cpp"
 DEVICE_DEST="/data/local/tmp"
 QUARTZ_ROOT="${SCRIPT_DIR}/../quartz"
-NSP_SKEL="${QUARTZ_ROOT}/hexagon/build-v81/libnsp_freq_skel.so"
+NSP_SKEL="${PKG_DIR}/lib/libnsp_freq_skel.so"
 QUARTZ_TOOLS_DIR="${QUARTZ_ROOT}/build/android-arm64/tools"
 
 usage() {
@@ -94,9 +94,7 @@ echo "==> Pushing package via adb"
 "${ADB[@]}" push "${PKG_DIR}" "${DEVICE_DEST}/"
 
 if [ -f "${NSP_SKEL}" ]; then
-    echo "==> Pushing v81 NSP FastRPC skeleton"
-    "${ADB[@]}" shell "mkdir -p ${DEVICE_DEST}/llama.cpp/lib"
-    "${ADB[@]}" push "${NSP_SKEL}" "${DEVICE_DEST}/llama.cpp/lib/libnsp_freq_skel.so"
+    echo "==> NSP FastRPC skeleton included in package"
 else
     echo "==> WARNING: NSP FastRPC skeleton not found; skipping: ${NSP_SKEL}" >&2
 fi

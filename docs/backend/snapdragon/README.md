@@ -92,6 +92,51 @@ To generate an installable "package" simply use cmake --install:
 ...
 ```
 
+### Build llama-quartz-bench with Quartz
+
+`BUILD_WITH_QUARTZ` defaults to `OFF`. When enabled, it builds `llama-quartz-bench` and defines the `BUILD_WITH_QUARTZ=1` C++ macro only for that target. The inference core, backend defaults, and standard benchmarks are unchanged. With the option on, the benchmark links Quartz statically. With it off, `#ifdef BUILD_WITH_QUARTZ` removes the Quartz headers, options, power control, telemetry, checkpoints, analysis, and exports; the inference workload can still be built explicitly without Quartz.
+
+To build the workload without profiling, no Quartz root is required. This target is excluded from the default build when profiling is off:
+
+```bash
+cmake -S . -B build-bench -DBUILD_WITH_QUARTZ=OFF
+cmake --build build-bench --target llama-quartz-bench --parallel 4
+```
+
+Select exactly one dependency root when enabling profiling. These are CMake options and work without Docker or the build helper:
+
+```bash
+# Native source build.
+cmake -S . -B build-quartz-source \
+  -DBUILD_WITH_QUARTZ=ON \
+  -DQUARTZ_SRC_ROOT=/path/to/quartz
+cmake --build build-quartz-source --target llama-quartz-bench --parallel 4
+
+# Native SDK build: use a native SDK, not an Android SDK.
+cmake -S . -B build-quartz-sdk \
+  -DBUILD_WITH_QUARTZ=ON \
+  -DQUARTZ_SDK_ROOT=/path/to/native-quartz-sdk
+cmake --build build-quartz-sdk --target llama-quartz-bench --parallel 4
+```
+
+For Snapdragon Android, configure with `--preset arm64-android-snapdragon-release` instead of `-S .` inside the toolchain environment, and use an Android SDK or source build. `QUARTZ_SRC_ROOT` contains Quartz's `CMakeLists.txt`; `QUARTZ_SDK_ROOT` contains the installed `include/` and `lib/` directories. Neither option names a single library file. When switching modes in an existing build directory, clear the previous root with `-DQUARTZ_SRC_ROOT=` or `-DQUARTZ_SDK_ROOT=`.
+
+The local Docker helper accepts the same options, resolving the root on the host and mounting it read-only at `/quartz` or `/quartz-sdk`:
+
+```bash
+./run-build.sh -DBUILD_WITH_QUARTZ=ON \
+  -DQUARTZ_SRC_ROOT=/path/to/quartz -DQUARTZ_BUILD_NSP_SKEL=ON
+
+./run-build.sh -DBUILD_WITH_QUARTZ=ON \
+  -DQUARTZ_SDK_ROOT=/path/to/android-quartz-sdk
+```
+
+`--quartz-source PATH` and `--quartz-sdk PATH` remain shortcuts for those root arguments. Matching `QUARTZ_SRC_ROOT` or `QUARTZ_SDK_ROOT` environment variables can also supply a path to the helper. An explicit root argument overrides the environment; specifying both roots is an error. The helper clears the previous root selection in its build cache. It does not implicitly enable profiling just because a Quartz directory is available.
+
+The source-mode Docker example builds both the ARM Quartz library and `build-snapdragon/quartz/libnsp_freq_skel.so`. The image supplies `HEXAGON_SDK_ROOT` and `HEXAGON_TOOLS_ROOT`; Quartz detects its QAIC layout and DSP compiler library variant. `QUARTZ_HEXAGON_ARCH` selects the DSP architecture (default: v81). Explicitly enabling `QUARTZ_BUILD_NSP_SKEL` also overrides an earlier cached `OFF` setting. SDK mode uses its packaged DSP binary and does not invoke Quartz's DSP compiler. Use an SDK built for the target ABI with a compatible compiler and C++ runtime.
+
+The executable is `<build-dir>/bin/llama-quartz-bench`. Static linking does not require `libquartz.so` on the device. NSP control still requires a compatible `libnsp_freq_skel.so` on the DSP search path and the device's FastRPC runtime; CPU/GPU/DDR plans need the Quartz actuation service. `cmake --install` includes the skeleton in the package's `lib/` directory when it is built from source or present in the selected SDK. `run-build.sh` performs this install into `pkg-snapdragon/llama.cpp`; deployment uses that packaged skeleton. Quartz command-line tools still need to be built or deployed separately.
+
 ## How to Install
 
 ### Android

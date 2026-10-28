@@ -3,9 +3,11 @@
 #include "llama.h"
 #include "sampling.h"
 
+#ifdef BUILD_WITH_QUARTZ
 #include <quartz/Quartz.h>
-#include <quartz/FrequencyReadback.h>
+#include <quartz/analysis/PhaseTypes.h>
 #include <quartz/platform/device_setup.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -19,10 +21,13 @@
 #include <string>
 #include <vector>
 
+#ifdef BUILD_WITH_QUARTZ
 using namespace quartz;
+#endif
 
 namespace {
 
+#ifdef BUILD_WITH_QUARTZ
 struct options {
     std::string plan;
     std::string nspPowerMode;
@@ -110,6 +115,12 @@ static bool apply_nsp_power_mode(QuartzSession& session, NspPowerMode mode,
     return true;
 }
 
+#else
+static void print_usage(int, char ** argv) {
+    std::fprintf(stderr, "usage: %s [-m MODEL] [-p PROMPT] [-n TOKENS]\n", argv[0]);
+}
+#endif
+
 static std::vector<llama_token> make_prompt_tokens(
         llama_model * model, llama_context * ctx, const std::string & prompt) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -141,9 +152,12 @@ static std::vector<llama_token> make_prompt_tokens(
 
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
+#ifdef BUILD_WITH_QUARTZ
     log::setLevel(log::Level::Info);
+#endif
 
     std::vector<char *> llama_args(argv, argv + argc);
+#ifdef BUILD_WITH_QUARTZ
     options opt;
     take_option(llama_args, "--plan", opt.plan);
     const bool nspPowerModeRequested =
@@ -176,6 +190,8 @@ int main(int argc, char ** argv) {
                     "(Quartz NSP HAP control disabled)\n");
     }
 
+#endif
+
     common_params params;
     common_init();
     if (!common_params_parse(static_cast<int>(llama_args.size()), llama_args.data(),
@@ -187,6 +203,7 @@ int main(int argc, char ** argv) {
     }
     params.warmup = false;
 
+#ifdef BUILD_WITH_QUARTZ
     const auto nspPowerMode = nspPowerModeRequested
         ? nspPowerModeFromString(opt.nspPowerMode)
         : std::optional<NspPowerMode>{};
@@ -259,11 +276,7 @@ int main(int argc, char ** argv) {
     session.selectRails({"soc"});
     std::fprintf(stderr, "[quartz-bench] selected telemetry rail: soc\n");
 
-    // Checkpoint IDs intentionally remain compatible with existing benchmark
-    // traces.  They hash __builtin_FUNCTION() and __builtin_LINE(), and the
-    // plan-loading branch above added source lines before these checkpoints.
-    // Keep their logical line numbers at the prior values so a plan generated
-    // from the supplied low_balanced trace still matches at runtime.
+    // Explicit checkpoint line values preserve the IDs used by existing plans.
 
     session.start();
 
@@ -273,45 +286,62 @@ int main(int argc, char ** argv) {
     //     print_nsp_hap_state(session, "plan-initial");
     // }
 
-    session.checkpoint();
+    session.checkpoint("", __func__, 276);
+#endif
 
     llama_backend_init();
     llama_numa_init(params.numa);
     auto llama_init = common_init_from_params(params);
 
-    session.checkpoint();
+#ifdef BUILD_WITH_QUARTZ
+    session.checkpoint("", __func__, 282);
+#endif
     llama_model * model = llama_init->model();
 
-    session.checkpoint();
+#ifdef BUILD_WITH_QUARTZ
+    session.checkpoint("", __func__, 285);
+#endif
 
     llama_context * ctx = llama_init->context();
     if (model == nullptr || ctx == nullptr) {
         std::fprintf(stderr, "failed to initialize llama\n");
         llama_init.reset();
         llama_backend_free();
+#ifdef BUILD_WITH_QUARTZ
         session.stop();
+#endif
         return 1;
     }
-    session.checkpoint();
+#ifdef BUILD_WITH_QUARTZ
+    session.checkpoint("", __func__, 295);
+#endif
 
     std::vector<llama_token> prompt_tokens = make_prompt_tokens(model, ctx, params.prompt);
     if (prompt_tokens.empty()) {
         std::fprintf(stderr, "prompt produced no tokens\n");
         llama_init.reset();
         llama_backend_free();
+#ifdef BUILD_WITH_QUARTZ
         session.stop();
+#endif
         return 1;
     }
-    session.checkpoint();
+#ifdef BUILD_WITH_QUARTZ
+    session.checkpoint("", __func__, 305);
+#endif
     common_sampler * sampler = common_sampler_init(model, params.sampling);
     if (sampler == nullptr) {
         std::fprintf(stderr, "failed to initialize sampler\n");
         llama_init.reset();
         llama_backend_free();
+#ifdef BUILD_WITH_QUARTZ
         session.stop();
+#endif
         return 1;
     }
-    session.checkpoint();
+#ifdef BUILD_WITH_QUARTZ
+    session.checkpoint("", __func__, 314);
+#endif
     const int n_batch = static_cast<int>(llama_n_batch(ctx));
     const int n_predict = params.n_predict < 0 ? 32 : params.n_predict;
 
@@ -330,10 +360,14 @@ int main(int argc, char ** argv) {
             common_sampler_free(sampler);
             llama_init.reset();
             llama_backend_free();
+#ifdef BUILD_WITH_QUARTZ
             session.stop();
+#endif
             return 1;
         }
-        session.checkpoint();
+#ifdef BUILD_WITH_QUARTZ
+        session.checkpoint("", __func__, 336);
+#endif
         pos += n_tokens;
     }
 
@@ -345,31 +379,36 @@ int main(int argc, char ** argv) {
             common_sampler_free(sampler);
             llama_init.reset();
             llama_backend_free();
+#ifdef BUILD_WITH_QUARTZ
             session.stop();
+#endif
             return 1;
         }
         next = common_sampler_sample(sampler, ctx, -1);
-        session.checkpoint();
+#ifdef BUILD_WITH_QUARTZ
+        session.checkpoint("", __func__, 352);
+#endif
     }
 
+#ifdef BUILD_WITH_QUARTZ
     session.stop();
     // Use the same public unified segmentation API exposed to applications.
     // Keep only workload-relevant rails, reject sub-second control phases,
     // and merge adjacent phases with nearly identical rail-power profiles.
     
-    // analysis::PhaseOptions phaseOptions;
-    // phaseOptions.metric = DistanceMetric::Manhattan;
-    // phaseOptions.marginWatts = 0.05;
-    // phaseOptions.cutoff = 0.15;
-    // phaseOptions.minDurationUs = 200000;
-    // const auto phaseResult = session.assignPhases(phaseOptions);
-    // std::fprintf(stderr,
-    //              "[quartz-bench] phases=%zu null_boundaries_removed=%zu "
-    //              "merged_boundaries_removed=%zu iterations=%zu\n",
-    //              phaseResult.finalPhaseCount,
-    //              phaseResult.nullBoundariesRemoved,
-    //              phaseResult.mergedBoundariesRemoved,
-    //              phaseResult.iterationsRun);
+    analysis::PhaseOptions phaseOptions;
+    phaseOptions.metric = DistanceMetric::Manhattan;
+    phaseOptions.marginWatts = 0.05;
+    phaseOptions.cutoff = 0.5;
+    phaseOptions.minDurationUs = 200000;
+    const auto phaseResult = session.assignPhases(phaseOptions);
+    std::fprintf(stderr,
+                 "[quartz-bench] phases=%zu null_boundaries_removed=%zu "
+                 "merged_boundaries_removed=%zu iterations=%zu\n",
+                 phaseResult.finalPhaseCount,
+                 phaseResult.nullBoundariesRemoved,
+                 phaseResult.mergedBoundariesRemoved,
+                 phaseResult.iterationsRun);
 
     const auto & trace = session.checkpointTrace();
     if (trace.size() < 2) {
@@ -410,6 +449,7 @@ int main(int argc, char ** argv) {
     session.exportSamplesCsv(opt.samples);
     session.exportCheckpointsCsv(opt.trace, CheckpointExport::All);
     session.exportCheckpointsCsv(opt.pivots, CheckpointExport::Pivots);
+#endif
 
     common_sampler_free(sampler);
     llama_init.reset(); 
