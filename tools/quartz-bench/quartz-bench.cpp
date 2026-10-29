@@ -399,7 +399,7 @@ int main(int argc, char ** argv) {
     analysis::PhaseOptions phaseOptions;
     phaseOptions.metric = DistanceMetric::Manhattan;
     phaseOptions.marginWatts = 0.05;
-    phaseOptions.cutoff = 0.5;
+    phaseOptions.cutoff = 0.15;
     phaseOptions.minDurationUs = 200000;
     const auto phaseResult = session.assignPhases(phaseOptions);
     std::fprintf(stderr,
